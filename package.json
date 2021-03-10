@@ -1,8 +1,9 @@
 {
-  "name": "parse-server",
+  "name": "@mench/parse-server",
   "version": "4.5.0",
   "description": "An express module providing a Parse-compatible API server",
   "main": "lib/index.js",
+  "types": "types/index.d.ts",
   "repository": {
     "type": "git",
     "url": "https://github.com/parse-community/parse-server"
@@ -10,6 +11,7 @@
   "files": [
     "bin/",
     "lib/",
+    "types/",
     "public_html/",
     "views/",
     "LICENSE",
@@ -19,6 +21,8 @@
   ],
   "license": "BSD-3-Clause",
   "dependencies": {
+    "@types/express": "^4.16.0",
+    "@types/redis": "^2.8.10",
     "@apollographql/graphql-playground-html": "1.6.26",
     "@graphql-tools/links": "6.2.5",
     "@graphql-tools/stitch": "6.2.4",
@@ -67,7 +71,7 @@
     "@babel/core": "7.10.0",
     "@babel/plugin-proposal-object-rest-spread": "7.10.0",
     "@babel/plugin-transform-flow-strip-types": "7.9.0",
-    "@babel/preset-env": "7.10.0",
+    "@babel/preset-env": "^7.13.10",
     "@parse/minami": "1.0.0",
     "all-node-versions": "8.0.0",
     "apollo-cache-inmemory": "1.6.6",

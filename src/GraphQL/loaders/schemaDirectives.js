@@ -12,7 +12,7 @@ const load = parseGraphQLSchema => {
 
   class ResolveDirectiveVisitor extends SchemaDirectiveVisitor {
     visitFieldDefinition(field) {
-      field.resolve = async (_source, args, context) => {
+      field.resolve = async (_source, args, context, _info) => {
         try {
           const { config, auth, info } = context;
 
@@ -30,6 +30,8 @@ const load = parseGraphQLSchema => {
               auth,
               info,
               body: args,
+              _info,
+              _source,
             })
           ).response.result;
         } catch (e) {
