@@ -1,4 +1,4 @@
-import { GraphQLInputObjectType, GraphQLNonNull, GraphQLObjectType } from 'graphql';
+import { GraphQLInputObjectType, GraphQLList, GraphQLNonNull, GraphQLObjectType } from 'graphql';
 import { transformOutputTypeToGraphQL } from './outputType';
 import { ParseGraphQLSchema } from '../ParseGraphQLSchema';
 import { transformInputTypeToGraphQL } from './inputType';
@@ -13,16 +13,18 @@ export function transformObjectOutputTypeToGraphQL(
     existingType => existingType.name === graphQLTypeName
   );
   if (type) {
-    console.info(type.name);
     return type;
   }
   const fields = parseFields.reduce((fields, field) => {
     let type;
-    if (parseClass.fields[field].type === 'Object' && parseClass.fields[field].schema) {
+    if (parseClass.fields[field].schema) {
       type = transformObjectOutputTypeToGraphQL(
         parseClass.fields[field].schema,
         parseGraphQLSchema
       );
+      if (parseClass.fields[field].type === 'Array') {
+        type = new GraphQLList(type);
+      }
     } else {
       type = transformOutputTypeToGraphQL(
         parseClass.fields[field].type,

@@ -380,6 +380,9 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
           parseClass.fields[field].schema,
           parseGraphQLSchema
         );
+        if (parseClass.fields[field].type === 'Array') {
+          type = new GraphQLList(type);
+        }
       } else {
         type = transformOutputTypeToGraphQL(
           parseClass.fields[field].type,
@@ -467,7 +470,7 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
             },
           },
         };
-      } else if (parseClass.fields[field].type === 'Array') {
+      } else if (parseClass.fields[field].type === 'Array' && !parseClass.fields[field].schema) {
         return {
           ...fields,
           [field]: {
@@ -558,7 +561,7 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
 };
 
 function hasNestedObjectType(field) {
-  return field.type === 'Object' && field.schema;
+  return (field.type === 'Object' || field.type === 'Array') && field.schema;
 }
 
 export { extractKeysAndInclude, load };
