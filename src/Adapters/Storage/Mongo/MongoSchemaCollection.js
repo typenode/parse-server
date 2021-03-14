@@ -14,6 +14,12 @@ function mongoFieldToParseSchemaField(type) {
       targetClass: type.slice('relation<'.length, type.length - 1),
     };
   }
+  if (type.startsWith('array<')) {
+    return {
+      type: 'Array',
+      targetClass: type.slice('array<'.length, type.length - 1),
+    };
+  }
   switch (type) {
     case 'number':
       return { type: 'Number' };
@@ -134,6 +140,9 @@ function parseFieldTypeToMongoFieldType({ type, targetClass }) {
     case 'Object':
       return 'object';
     case 'Array':
+      if (targetClass) {
+        return `array<${targetClass}>`;
+      }
       return 'array';
     case 'GeoPoint':
       return 'geopoint';

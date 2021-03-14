@@ -18,6 +18,8 @@ import { transformInputTypeToGraphQL } from '../transformers/inputType';
 import { transformOutputTypeToGraphQL } from '../transformers/outputType';
 import { transformConstraintTypeToGraphQL } from '../transformers/constraintType';
 import { extractKeysAndInclude, getParseClassMutationConfig } from '../parseGraphQLUtils';
+import { transformObjectInputTypeToGraphQL } from '../transformers/objectType';
+import { transformObjectOutputTypeToGraphQL } from '../transformers/objectType';
 
 const getParseClassTypeConfig = function (parseClassConfig: ?ParseGraphQLClassConfig) {
   return (parseClassConfig && parseClassConfig.type) || {};
@@ -130,11 +132,20 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
     fields: () =>
       classCreateFields.reduce(
         (fields, field) => {
-          const type = transformInputTypeToGraphQL(
-            parseClass.fields[field].type,
-            parseClass.fields[field].targetClass,
-            parseGraphQLSchema.parseClassTypes
-          );
+          let type;
+          if (hasNestedObjectType(parseClass.fields[field])) {
+            type = transformObjectInputTypeToGraphQL(
+              parseClass.fields[field].schema,
+              parseGraphQLSchema
+            );
+          } else {
+            type = transformInputTypeToGraphQL(
+              parseClass.fields[field].type,
+              parseClass.fields[field].targetClass,
+              parseGraphQLSchema.parseClassTypes
+            );
+          }
+
           if (type) {
             return {
               ...fields,
@@ -165,11 +176,19 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
     fields: () =>
       classUpdateFields.reduce(
         (fields, field) => {
-          const type = transformInputTypeToGraphQL(
-            parseClass.fields[field].type,
-            parseClass.fields[field].targetClass,
-            parseGraphQLSchema.parseClassTypes
-          );
+          let type;
+          if (hasNestedObjectType(parseClass.fields[field])) {
+            type = transformObjectInputTypeToGraphQL(
+              parseClass.fields[field].schema,
+              parseGraphQLSchema
+            );
+          } else {
+            type = transformInputTypeToGraphQL(
+              parseClass.fields[field].type,
+              parseClass.fields[field].targetClass,
+              parseGraphQLSchema.parseClassTypes
+            );
+          }
           if (type) {
             return {
               ...fields,
@@ -355,11 +374,19 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
   };
   const outputFields = () => {
     return classOutputFields.reduce((fields, field) => {
-      const type = transformOutputTypeToGraphQL(
-        parseClass.fields[field].type,
-        parseClass.fields[field].targetClass,
-        parseGraphQLSchema.parseClassTypes
-      );
+      let type;
+      if (hasNestedObjectType(parseClass.fields[field])) {
+        type = transformObjectOutputTypeToGraphQL(
+          parseClass.fields[field].schema,
+          parseGraphQLSchema
+        );
+      } else {
+        type = transformOutputTypeToGraphQL(
+          parseClass.fields[field].type,
+          parseClass.fields[field].targetClass,
+          parseGraphQLSchema.parseClassTypes
+        );
+      }
       if (parseClass.fields[field].type === 'Relation') {
         const targetParseClassTypes =
           parseGraphQLSchema.parseClassTypes[parseClass.fields[field].targetClass];
@@ -447,7 +474,9 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
             description: `Use Inline Fragment on Array to get results: https://graphql.org/learn/queries/#inline-fragments`,
             type: parseClass.fields[field].required ? new GraphQLNonNull(type) : type,
             async resolve(source) {
-              if (!source[field]) return null;
+              if (!source[field]) {
+                return null;
+              }
               return source[field].map(async elem => {
                 if (elem.className && elem.objectId && elem.__type === 'Object') {
                   return elem;
@@ -527,5 +556,9 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
     parseGraphQLSchema.viewerType = viewerType;
   }
 };
+
+function hasNestedObjectType(field) {
+  return field.type === 'Object' && field.schema;
+}
 
 export { extractKeysAndInclude, load };

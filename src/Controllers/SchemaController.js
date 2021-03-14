@@ -660,10 +660,21 @@ const VolatileClassesSchemas = [
 ];
 
 const dbTypeMatchesObjectType = (dbType: SchemaField | string, objectType: SchemaField) => {
-  if (dbType.type !== objectType.type) return false;
-  if (dbType.targetClass !== objectType.targetClass) return false;
-  if (dbType === objectType.type) return true;
-  if (dbType.type === objectType.type) return true;
+  if (dbType.type !== objectType.type) {
+    return false;
+  }
+  if (dbType.targetClass !== objectType.targetClass) {
+    if (dbType.type === 'Array') {
+      return true;
+    }
+    return false;
+  }
+  if (dbType === objectType.type) {
+    return true;
+  }
+  if (dbType.type === objectType.type) {
+    return true;
+  }
   return false;
 };
 
@@ -998,7 +1009,9 @@ export default class SchemaController {
         }
         const fieldType = fields[fieldName];
         const error = fieldTypeIsInvalid(fieldType);
-        if (error) return { code: error.code, error: error.message };
+        if (error) {
+          return { code: error.code, error: error.message };
+        }
         if (fieldType.defaultValue !== undefined) {
           let defaultValueType = getType(fieldType.defaultValue);
           if (typeof defaultValueType === 'string') {

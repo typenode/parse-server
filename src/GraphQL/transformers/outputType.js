@@ -10,27 +10,23 @@ const transformOutputTypeToGraphQL = (parseType, targetClass, parseClassTypes) =
     case 'Boolean':
       return GraphQLBoolean;
     case 'Array':
-      return new GraphQLList(defaultGraphQLTypes.ARRAY_RESULT);
+      if (hasOutputType(parseClassTypes, targetClass)) {
+        return new GraphQLList(parseClassTypes[targetClass].classGraphQLOutputType);
+      } else {
+        return new GraphQLList(defaultGraphQLTypes.ARRAY_RESULT);
+      }
     case 'Object':
       return defaultGraphQLTypes.OBJECT;
     case 'Date':
       return defaultGraphQLTypes.DATE;
     case 'Pointer':
-      if (
-        parseClassTypes &&
-        parseClassTypes[targetClass] &&
-        parseClassTypes[targetClass].classGraphQLOutputType
-      ) {
+      if (hasOutputType(parseClassTypes, targetClass)) {
         return parseClassTypes[targetClass].classGraphQLOutputType;
       } else {
         return defaultGraphQLTypes.OBJECT;
       }
     case 'Relation':
-      if (
-        parseClassTypes &&
-        parseClassTypes[targetClass] &&
-        parseClassTypes[targetClass].classGraphQLFindResultType
-      ) {
+      if (hasOutputType(parseClassTypes, targetClass)) {
         return new GraphQLNonNull(parseClassTypes[targetClass].classGraphQLFindResultType);
       } else {
         return new GraphQLNonNull(defaultGraphQLTypes.OBJECT);
@@ -49,5 +45,13 @@ const transformOutputTypeToGraphQL = (parseType, targetClass, parseClassTypes) =
       return undefined;
   }
 };
+
+function hasOutputType(parseClassTypes, targetClass: string) {
+  return (
+    parseClassTypes &&
+    parseClassTypes[targetClass] &&
+    parseClassTypes[targetClass].classGraphQLOutputType
+  );
+}
 
 export { transformOutputTypeToGraphQL };
