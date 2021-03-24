@@ -65,8 +65,11 @@ export function transformObjectInputTypeToGraphQL(
   }
   const fields = parseFields.reduce((fields, field) => {
     let type;
-    if (parseClass.fields[field].type === 'Object' && parseClass.fields[field].schema) {
+    if (parseClass.fields[field].schema) {
       type = transformObjectInputTypeToGraphQL(parseClass.fields[field].schema, parseGraphQLSchema);
+      if (parseClass.fields[field].type === 'Array') {
+        type = new GraphQLList(type);
+      }
     } else {
       type = transformInputTypeToGraphQL(
         parseClass.fields[field].type,

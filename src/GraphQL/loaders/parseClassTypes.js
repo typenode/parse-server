@@ -182,6 +182,9 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
               parseClass.fields[field].schema,
               parseGraphQLSchema
             );
+            if (isNestedArray(parseClass.fields[field])) {
+              type = new GraphQLList(type);
+            }
           } else {
             type = transformInputTypeToGraphQL(
               parseClass.fields[field].type,
@@ -562,6 +565,9 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
 
 function hasNestedObjectType(field) {
   return (field.type === 'Object' || field.type === 'Array') && field.schema;
+}
+function isNestedArray(field) {
+  return field.type === 'Array' && field.schema;
 }
 
 export { extractKeysAndInclude, load };
