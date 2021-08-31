@@ -262,18 +262,18 @@ class ParseServer {
         graphQLCustomTypeDefs = options.graphQLSchema;
       }
 
-      const parseGraphQLServer = new ParseGraphQLServer(this, {
+      this.parseGraphQLServer = new ParseGraphQLServer(this, {
         graphQLPath: options.graphQLPath,
         playgroundPath: options.playgroundPath,
         graphQLCustomTypeDefs,
       });
 
       if (options.mountGraphQL) {
-        parseGraphQLServer.applyGraphQL(app);
+        this.parseGraphQLServer.applyGraphQL(app);
       }
 
       if (options.mountPlayground) {
-        parseGraphQLServer.applyPlayground(app);
+        this.parseGraphQLServer.applyPlayground(app);
       }
     }
 

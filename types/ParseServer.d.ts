@@ -1,17 +1,18 @@
-import { Server } from "http";
+import { Server }      from "http";
 import { Application } from "Express";
 
-import { PromiseRouter } from "./PromiseRouter";
-import { Config, ServerConfiguration } from "./Config";
+import { PromiseRouter }                              from "./PromiseRouter";
+import { Config, ServerConfiguration }                from "./Config";
 import { ParseServerOptions, LiveQueryServerOptions } from "./Options";
-import { ParseLiveQueryServer } from "./LiveQuery/ParseLiveQueryServer";
+import { ParseLiveQueryServer }                       from "./LiveQuery/ParseLiveQueryServer";
 
 export class ParseServer {
   private config: ServerConfiguration;
 
   public app: Application;
   public expressApp: Application;
-
+  public parseGraphQLServer: any;
+  public liveQueryServer: any;
   /**
    * @constructor
    * @param {ParseServerOptions} options parse server initialization options
