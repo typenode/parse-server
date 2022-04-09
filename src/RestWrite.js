@@ -579,6 +579,10 @@ RestWrite.prototype.transformUser = function () {
     throw new Parse.Error(Parse.Error.OPERATION_FORBIDDEN, error);
   }
 
+  if (this.data.authData) {
+    this.data.emailVerified = true;
+  }
+
   // Do not cleanup session if objectId is not set
   if (this.query && this.objectId()) {
     // If we're updating a _User object, we need to clear out the cache for that user. Find all their
@@ -840,7 +844,7 @@ RestWrite.prototype.createSessionTokenIfNeeded = function () {
     return;
   }
   if (
-    !this.storage['authProvider'] && // signup call, with
+    !this.data.authData && // signup call, with
     this.config.preventLoginWithUnverifiedEmail && // no login without verification
     this.config.verifyUserEmails
   ) {
