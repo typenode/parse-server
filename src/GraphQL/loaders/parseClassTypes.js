@@ -138,6 +138,9 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
               parseClass.fields[field].schema,
               parseGraphQLSchema
             );
+            if (isNestedArray(parseClass.fields[field])) {
+              type = new GraphQLList(type);
+            }
           } else {
             type = transformInputTypeToGraphQL(
               parseClass.fields[field].type,
