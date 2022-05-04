@@ -490,7 +490,11 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
                 if (elem.className && elem.objectId && elem.__type === 'Object') {
                   return elem;
                 } else {
-                  return { value: elem };
+                  if (parseClass.fields[field].targetClass) {
+                    return elem;
+                  } else {
+                    return { value: elem };
+                  }
                 }
               });
             },

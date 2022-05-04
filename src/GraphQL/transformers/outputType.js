@@ -10,7 +10,11 @@ const transformOutputTypeToGraphQL = (parseType, targetClass, parseClassTypes) =
     case 'Boolean':
       return GraphQLBoolean;
     case 'Array':
-      if (hasOutputType(parseClassTypes, targetClass)) {
+      if (targetClass === 'String') {
+        return new GraphQLList(GraphQLString);
+      } else if (targetClass === 'Number') {
+        return new GraphQLList(GraphQLFloat);
+      } else if (hasOutputType(parseClassTypes, targetClass)) {
         return new GraphQLList(parseClassTypes[targetClass].classGraphQLOutputType);
       } else {
         return new GraphQLList(defaultGraphQLTypes.ARRAY_RESULT);
