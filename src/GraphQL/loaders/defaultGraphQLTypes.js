@@ -315,7 +315,7 @@ const FILE = new GraphQLScalarType({
       typeof value.name === 'string' &&
       (value.url === undefined || typeof value.url === 'string')
     ) {
-      return value.name;
+      return value;
     }
 
     throw new TypeValidationError(value, 'File');
