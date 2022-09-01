@@ -14,6 +14,8 @@ const transformOutputTypeToGraphQL = (parseType, targetClass, parseClassTypes) =
         return new GraphQLList(GraphQLString);
       } else if (targetClass === 'Number') {
         return new GraphQLList(GraphQLFloat);
+      } else if (targetClass === 'Object') {
+        return new GraphQLList(defaultGraphQLTypes.OBJECT);
       } else if (hasOutputType(parseClassTypes, targetClass)) {
         return new GraphQLList(parseClassTypes[targetClass].classGraphQLOutputType);
       } else {
