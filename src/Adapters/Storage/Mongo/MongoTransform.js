@@ -316,7 +316,7 @@ function transformQueryKeyValue(className, key, value, schema, count = false) {
       return { key: '$text', value: transformedConstraint.$text };
     }
     if (transformedConstraint.$elemMatch) {
-      return { key: '$nor', value: [{ [key]: transformedConstraint }] };
+      return { key: '$or', value: [{ [key]: transformedConstraint }] };
     }
     return { key, value: transformedConstraint };
   }
@@ -855,6 +855,12 @@ function transformConstraint(constraint, field, count = false) {
 
         break;
       }
+      case '$notElemMatch':
+        answer.$not = { $elemMatch: constraint[key] };
+        break;
+      case '$elemMatch':
+        answer[key] = constraint[key];
+        break;
       case '$regex':
         var s = constraint[key];
         if (typeof s !== 'string') {

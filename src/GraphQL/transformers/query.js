@@ -49,9 +49,11 @@ const transformQueryConstraintInputToParse = (
   parentFieldName,
   className,
   parentConstraints,
-  parseClasses
+  parseClasses,
+  schema
 ) => {
-  const fields = parseClasses.find(parseClass => parseClass.className === className).fields;
+  const fields =
+    parseClasses.find(parseClass => parseClass.className === className)?.fields || schema?.fields;
   if (parentFieldName === 'id' && className) {
     Object.keys(constraints).forEach(constraintName => {
       const constraintValue = constraints[constraintName];
@@ -116,6 +118,25 @@ const transformQueryConstraintInputToParse = (
       };
     } else if (
       fields[parentFieldName] &&
+      fields[parentFieldName].type === 'Array' &&
+      fields[parentFieldName].schema
+    ) {
+      const schema = fields[parentFieldName].schema;
+      const targetClass = schema.className;
+      switch (fieldName) {
+        case 'have':
+          transformQueryInputToParse(fieldValue, targetClass, parseClasses, schema);
+          parentConstraints[parentFieldName].$elemMatch = fieldValue;
+          break;
+        case 'haveNot':
+          transformQueryInputToParse(fieldValue, targetClass, parseClasses, schema);
+          parentConstraints[parentFieldName].$notElemMatch = fieldValue;
+          break;
+      }
+      delete constraints[fieldName];
+      return;
+    } else if (
+      fields[parentFieldName] &&
       (fields[parentFieldName].type === 'Pointer' || fields[parentFieldName].type === 'Relation')
     ) {
       const { targetClass } = fields[parentFieldName];
@@ -155,7 +176,8 @@ const transformQueryConstraintInputToParse = (
           transformQueryInputToParse(
             parentConstraints[parentFieldName].$inQuery.where,
             targetClass,
-            parseClasses
+            parseClasses,
+            schema
           );
           break;
         case 'haveNot':
@@ -166,7 +188,8 @@ const transformQueryConstraintInputToParse = (
           transformQueryInputToParse(
             parentConstraints[parentFieldName].$notInQuery.where,
             targetClass,
-            parseClasses
+            parseClasses,
+            schema
           );
           break;
       }
@@ -223,21 +246,22 @@ const transformQueryConstraintInputToParse = (
     }
     if (typeof fieldValue === 'object') {
       if (fieldName === 'where') {
-        transformQueryInputToParse(fieldValue, className, parseClasses);
+        transformQueryInputToParse(fieldValue, className, parseClasses, schema);
       } else {
         transformQueryConstraintInputToParse(
           fieldValue,
           fieldName,
           className,
           constraints,
-          parseClasses
+          parseClasses,
+          schema
         );
       }
     }
   });
 };
 
-const transformQueryInputToParse = (constraints, className, parseClasses) => {
+const transformQueryInputToParse = (constraints, className, parseClasses, schema) => {
   if (!constraints || typeof constraints !== 'object') {
     return;
   }
@@ -250,7 +274,7 @@ const transformQueryInputToParse = (constraints, className, parseClasses) => {
       fieldName = parseQueryMap[fieldName];
       constraints[fieldName] = fieldValue;
       fieldValue.forEach(fieldValueItem => {
-        transformQueryInputToParse(fieldValueItem, className, parseClasses);
+        transformQueryInputToParse(fieldValueItem, className, parseClasses, schema);
       });
       return;
     } else {
@@ -259,7 +283,8 @@ const transformQueryInputToParse = (constraints, className, parseClasses) => {
         fieldName,
         className,
         constraints,
-        parseClasses
+        parseClasses,
+        schema
       );
     }
   });

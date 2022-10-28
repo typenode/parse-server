@@ -18,7 +18,10 @@ import { transformInputTypeToGraphQL } from '../transformers/inputType';
 import { transformOutputTypeToGraphQL } from '../transformers/outputType';
 import { transformConstraintTypeToGraphQL } from '../transformers/constraintType';
 import { extractKeysAndInclude, getParseClassMutationConfig } from '../parseGraphQLUtils';
-import { transformObjectInputTypeToGraphQL } from '../transformers/objectType';
+import {
+  transformObjectConstraintTypeToGraphQL,
+  transformObjectInputTypeToGraphQL,
+} from '../transformers/objectType';
 import { transformObjectOutputTypeToGraphQL } from '../transformers/objectType';
 
 const getParseClassTypeConfig = function (parseClassConfig: ?ParseGraphQLClassConfig) {
@@ -277,12 +280,53 @@ const load = (parseGraphQLSchema, parseClass, parseClassConfig: ?ParseGraphQLCla
           return fields;
         }
         const parseField = field === 'id' ? 'objectId' : field;
-        const type = transformConstraintTypeToGraphQL(
-          parseClass.fields[parseField].type,
-          parseClass.fields[parseField].targetClass,
-          parseGraphQLSchema.parseClassTypes,
-          field
-        );
+        let type;
+        if (hasNestedObjectType(parseClass.fields[parseField])) {
+          type = transformObjectConstraintTypeToGraphQL(
+            parseClass.fields[parseField].schema,
+            parseGraphQLSchema
+          );
+          if (isNestedArray(parseClass.fields[parseField])) {
+            const graphQLTypeName = parseClass.fields[parseField].schema.className;
+            const classGraphQLRelationConstraintsTypeName = `${graphQLTypeName}RelationWhereInput`;
+            const constraintsType = parseGraphQLSchema.graphQLTypes.find(
+              existingType => existingType.name === classGraphQLRelationConstraintsTypeName
+            );
+            if (constraintsType) {
+              type = constraintsType;
+            } else {
+              const nestedType = type;
+              type = new GraphQLInputObjectType({
+                name: classGraphQLRelationConstraintsTypeName,
+                description: `The ${classGraphQLRelationConstraintsTypeName} input type is used in operations that involve filtering objects of ${parseClass.className} class.`,
+                fields: () => ({
+                  have: {
+                    description:
+                      'Run a relational/pointer query where at least one child object can match.',
+                    type: nestedType,
+                  },
+                  haveNot: {
+                    description:
+                      'Run an inverted relational/pointer query where at least one child object can match.',
+                    type: nestedType,
+                  },
+                  exists: {
+                    description: 'Check if the relation/pointer contains objects.',
+                    type: GraphQLBoolean,
+                  },
+                }),
+              });
+              parseGraphQLSchema.addGraphQLType(type);
+            }
+          }
+        } else {
+          type = transformConstraintTypeToGraphQL(
+            parseClass.fields[parseField].type,
+            parseClass.fields[parseField].targetClass,
+            parseGraphQLSchema.parseClassTypes,
+            field
+          );
+        }
         if (type) {
           return {
             ...fields,
