@@ -1,12 +1,11 @@
 'use strict';
 
 const MongoStorageAdapter = require('../lib/Adapters/Storage/Mongo/MongoStorageAdapter').default;
-const { MongoClient } = require('mongodb');
+const { MongoClient, Collection } = require('mongodb');
 const databaseURI = 'mongodb://localhost:27017/parseServerMongoAdapterTestDatabase';
 const request = require('../lib/request');
 const Config = require('../lib/Config');
 const TestUtils = require('../lib/TestUtils');
-const semver = require('semver');
 
 const fakeClient = {
   s: { options: { dbName: null } },
@@ -18,6 +17,7 @@ const fakeClient = {
 describe_only_db('mongo')('MongoStorageAdapter', () => {
   beforeEach(done => {
     new MongoStorageAdapter({ uri: databaseURI }).deleteAllClasses().then(done, fail);
+    Config.get(Parse.applicationId).schemaCache.clear();
   });
 
   it('auto-escapes symbols in auth information', () => {
@@ -100,7 +100,7 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
           done.fail('Find succeeded despite taking too long!');
         },
         err => {
-          expect(err.name).toEqual('MongoError');
+          expect(err.name).toEqual('MongoServerError');
           expect(err.code).toEqual(50);
           expect(err.message).toMatch('operation exceeded time limit');
           done();
@@ -282,7 +282,7 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
       await adapter.database.admin().serverStatus();
       expect(false).toBe(true);
     } catch (e) {
-      expect(e.message).toEqual('topology was destroyed');
+      expect(e.message).toEqual('Client must be connected before running operations');
     }
   });
 
@@ -307,13 +307,15 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
     await expectAsync(adapter.getClass('UnknownClass')).toBeRejectedWith(undefined);
   });
 
-  it('should use index for caseInsensitive query', async () => {
+  it_only_mongodb_version('<5.1>=6')('should use index for caseInsensitive query', async () => {
     const user = new Parse.User();
     user.set('username', 'Bugs');
     user.set('password', 'Bunny');
     await user.signUp();
 
     const database = Config.get(Parse.applicationId).database;
+    await database.adapter.dropAllIndexes('_User');
+
     const preIndexPlan = await database.find(
       '_User',
       { username: 'bugs' },
@@ -337,6 +339,40 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
     );
     expect(preIndexPlan.executionStats.executionStages.stage).toBe('COLLSCAN');
     expect(postIndexPlan.executionStats.executionStages.stage).toBe('FETCH');
+  });
+
+  it_only_mongodb_version('>=5.1<6')('should use index for caseInsensitive query', async () => {
+    const user = new Parse.User();
+    user.set('username', 'Bugs');
+    user.set('password', 'Bunny');
+    await user.signUp();
+
+    const database = Config.get(Parse.applicationId).database;
+    await database.adapter.dropAllIndexes('_User');
+
+    const preIndexPlan = await database.find(
+      '_User',
+      { username: 'bugs' },
+      { caseInsensitive: true, explain: true }
+    );
+
+    const schema = await new Parse.Schema('_User').get();
+
+    await database.adapter.ensureIndex(
+      '_User',
+      schema,
+      ['username'],
+      'case_insensitive_username',
+      true
+    );
+
+    const postIndexPlan = await database.find(
+      '_User',
+      { username: 'bugs' },
+      { caseInsensitive: true, explain: true }
+    );
+    expect(preIndexPlan.queryPlanner.winningPlan.queryPlan.stage).toBe('COLLSCAN');
+    expect(postIndexPlan.queryPlanner.winningPlan.queryPlan.stage).toBe('FETCH');
   });
 
   it('should delete field without index', async () => {
@@ -364,11 +400,7 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
     expect(schemaAfterDeletion.fields.test).toBeUndefined();
   });
 
-  if (
-    semver.satisfies(process.env.MONGODB_VERSION, '>=4.0.4') &&
-    process.env.MONGODB_TOPOLOGY === 'replicaset' &&
-    process.env.MONGODB_STORAGE_ENGINE === 'wiredTiger'
-  ) {
+  if (process.env.MONGODB_TOPOLOGY === 'replicaset') {
     describe('transactions', () => {
       const headers = {
         'Content-Type': 'application/json',
@@ -376,15 +408,12 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
         'X-Parse-REST-API-Key': 'rest',
       };
 
-      beforeAll(async () => {
+      beforeEach(async () => {
         await reconfigureServer({
           databaseAdapter: undefined,
           databaseURI:
             'mongodb://localhost:27017/parseServerMongoAdapterTestDatabase?replicaSet=replicaset',
         });
-      });
-
-      beforeEach(async () => {
         await TestUtils.destroyAllDataPermanently(true);
       });
 
@@ -392,8 +421,7 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
         const myObject = new Parse.Object('MyObject');
         await myObject.save();
 
-        const databaseAdapter = Config.get(Parse.applicationId).database.adapter;
-        spyOn(databaseAdapter.database.serverConfig, 'command').and.callThrough();
+        spyOn(Collection.prototype, 'findOneAndUpdate').and.callThrough();
 
         await request({
           method: 'POST',
@@ -412,9 +440,9 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
         });
 
         let found = false;
-        databaseAdapter.database.serverConfig.command.calls.all().forEach(call => {
+        Collection.prototype.findOneAndUpdate.calls.all().forEach(call => {
           found = true;
-          expect(call.args[2].session.transaction.state).not.toBe('NO_TRANSACTION');
+          expect(call.args[2].session.transaction.state).toBe('TRANSACTION_COMMITTED');
         });
         expect(found).toBe(true);
       });
@@ -423,8 +451,7 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
         const myObject = new Parse.Object('MyObject');
         await myObject.save();
 
-        const databaseAdapter = Config.get(Parse.applicationId).database.adapter;
-        spyOn(databaseAdapter.database.serverConfig, 'command').and.callThrough();
+        spyOn(Collection.prototype, 'findOneAndUpdate').and.callThrough();
 
         await request({
           method: 'POST',
@@ -443,9 +470,9 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
         });
 
         let found = false;
-        databaseAdapter.database.serverConfig.command.calls.all().forEach(call => {
+        Collection.prototype.findOneAndUpdate.calls.all().forEach(call => {
           found = true;
-          expect(call.args[2].session).toBe(undefined);
+          expect(call.args[2].session).toBeFalsy();
         });
         expect(found).toBe(true);
       });
@@ -454,8 +481,7 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
         const myObject = new Parse.Object('MyObject');
         await myObject.save();
 
-        const databaseAdapter = Config.get(Parse.applicationId).database.adapter;
-        spyOn(databaseAdapter.database.serverConfig, 'command').and.callThrough();
+        spyOn(Collection.prototype, 'findOneAndUpdate').and.callThrough();
 
         await request({
           method: 'POST',
@@ -473,9 +499,9 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
         });
 
         let found = false;
-        databaseAdapter.database.serverConfig.command.calls.all().forEach(call => {
+        Collection.prototype.findOneAndUpdate.calls.all().forEach(call => {
           found = true;
-          expect(call.args[2].session).toBe(undefined);
+          expect(call.args[2].session).toBeFalsy();
         });
         expect(found).toBe(true);
       });
@@ -484,8 +510,7 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
         const myObject = new Parse.Object('MyObject');
         await myObject.save();
 
-        const databaseAdapter = Config.get(Parse.applicationId).database.adapter;
-        spyOn(databaseAdapter.database.serverConfig, 'command').and.callThrough();
+        spyOn(Collection.prototype, 'findOneAndUpdate').and.callThrough();
 
         await request({
           method: 'PUT',
@@ -495,30 +520,28 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
         });
 
         let found = false;
-        databaseAdapter.database.serverConfig.command.calls.all().forEach(call => {
+        Collection.prototype.findOneAndUpdate.calls.all().forEach(call => {
           found = true;
-          expect(call.args[2].session).toBe(undefined);
+          expect(call.args[2].session).toBeFalsy();
         });
         expect(found).toBe(true);
       });
 
       it('should not use transactions when using SDK insert', async () => {
-        const databaseAdapter = Config.get(Parse.applicationId).database.adapter;
-        spyOn(databaseAdapter.database.serverConfig, 'insert').and.callThrough();
+        spyOn(Collection.prototype, 'insertOne').and.callThrough();
 
         const myObject = new Parse.Object('MyObject');
         await myObject.save();
 
-        const calls = databaseAdapter.database.serverConfig.insert.calls.all();
+        const calls = Collection.prototype.insertOne.calls.all();
         expect(calls.length).toBeGreaterThan(0);
         calls.forEach(call => {
-          expect(call.args[2].session.transaction.state).toBe('NO_TRANSACTION');
+          expect(call.args[1].session).toBeFalsy();
         });
       });
 
       it('should not use transactions when using SDK update', async () => {
-        const databaseAdapter = Config.get(Parse.applicationId).database.adapter;
-        spyOn(databaseAdapter.database.serverConfig, 'update').and.callThrough();
+        spyOn(Collection.prototype, 'findOneAndUpdate').and.callThrough();
 
         const myObject = new Parse.Object('MyObject');
         await myObject.save();
@@ -526,27 +549,54 @@ describe_only_db('mongo')('MongoStorageAdapter', () => {
         myObject.set('myAttribute', 'myValue');
         await myObject.save();
 
-        const calls = databaseAdapter.database.serverConfig.update.calls.all();
+        const calls = Collection.prototype.findOneAndUpdate.calls.all();
         expect(calls.length).toBeGreaterThan(0);
         calls.forEach(call => {
-          expect(call.args[2].session.transaction.state).toBe('NO_TRANSACTION');
+          expect(call.args[2].session).toBeFalsy();
         });
       });
 
       it('should not use transactions when using SDK delete', async () => {
-        const databaseAdapter = Config.get(Parse.applicationId).database.adapter;
-        spyOn(databaseAdapter.database.serverConfig, 'remove').and.callThrough();
+        spyOn(Collection.prototype, 'deleteMany').and.callThrough();
 
         const myObject = new Parse.Object('MyObject');
         await myObject.save();
 
         await myObject.destroy();
 
-        const calls = databaseAdapter.database.serverConfig.remove.calls.all();
+        const calls = Collection.prototype.deleteMany.calls.all();
         expect(calls.length).toBeGreaterThan(0);
         calls.forEach(call => {
-          expect(call.args[2].session.transaction.state).toBe('NO_TRANSACTION');
+          expect(call.args[1].session).toBeFalsy();
         });
+      });
+    });
+
+    describe('watch _SCHEMA', () => {
+      it('should change', async done => {
+        const adapter = new MongoStorageAdapter({
+          uri: databaseURI,
+          collectionPrefix: '',
+          mongoOptions: { enableSchemaHooks: true },
+        });
+        await reconfigureServer({ databaseAdapter: adapter });
+        expect(adapter.enableSchemaHooks).toBe(true);
+        spyOn(adapter, '_onchange');
+        const schema = {
+          fields: {
+            array: { type: 'Array' },
+            object: { type: 'Object' },
+            date: { type: 'Date' },
+          },
+        };
+
+        await adapter.createClass('Stuff', schema);
+        const myClassSchema = await adapter.getClass('Stuff');
+        expect(myClassSchema).toBeDefined();
+        setTimeout(() => {
+          expect(adapter._onchange).toHaveBeenCalled();
+          done();
+        }, 5000);
       });
     });
   }

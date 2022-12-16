@@ -10,11 +10,18 @@ import { ParsePubSub } from './ParsePubSub';
 import SchemaController from '../Controllers/SchemaController';
 import _ from 'lodash';
 import { v4 as uuidv4 } from 'uuid';
-import { runLiveQueryEventHandlers, getTrigger, runTrigger } from '../triggers';
+import {
+  runLiveQueryEventHandlers,
+  getTrigger,
+  runTrigger,
+  resolveError,
+  toJSONwithObjects,
+} from '../triggers';
 import { getAuthForSessionToken, Auth } from '../Auth';
-import { getCacheController } from '../Controllers';
+import { getCacheController, getDatabaseController } from '../Controllers';
 import LRU from 'lru-cache';
 import UserRouter from '../Routers/UsersRouter';
+import DatabaseController from '../Controllers/DatabaseController';
 
 class ParseLiveQueryServer {
   clients: Map;
@@ -58,7 +65,7 @@ class ParseLiveQueryServer {
     // The main benefit is to be able to reuse the same user / session token resolution.
     this.authCache = new LRU({
       max: 500, // 500 concurrent
-      maxAge: config.cacheTimeout,
+      ttl: config.cacheTimeout,
     });
     // Initialize websocket server
     this.parseWebSocketServer = new ParseWebSocketServer(
@@ -66,20 +73,35 @@ class ParseLiveQueryServer {
       parseWebsocket => this._onConnect(parseWebsocket),
       config
     );
-
-    // Initialize subscriber
     this.subscriber = ParsePubSub.createSubscriber(config);
-    this.subscriber.subscribe(Parse.applicationId + 'afterSave');
-    this.subscriber.subscribe(Parse.applicationId + 'afterDelete');
-    // Register message handler for subscriber. When publisher get messages, it will publish message
-    // to the subscribers and the handler will be called.
-    this.subscriber.on('message', (channel, messageStr) => {
+    if (!this.subscriber.connect) {
+      this.connect();
+    }
+  }
+
+  async connect() {
+    if (this.subscriber.isOpen) {
+      return;
+    }
+    if (typeof this.subscriber.connect === 'function') {
+      await Promise.resolve(this.subscriber.connect());
+    } else {
+      this.subscriber.isOpen = true;
+    }
+    this._createSubscribers();
+  }
+  _createSubscribers() {
+    const messageRecieved = (channel, messageStr) => {
       logger.verbose('Subscribe message %j', messageStr);
       let message;
       try {
         message = JSON.parse(messageStr);
       } catch (e) {
         logger.error('unable to parse message', messageStr, e);
+        return;
+      }
+      if (channel === Parse.applicationId + 'clearCache') {
+        this._clearCachedRoles(message.userId);
         return;
       }
       this._inflateParseObject(message);
@@ -90,7 +112,12 @@ class ParseLiveQueryServer {
       } else {
         logger.error('Get message %s from unknown channel %j', message, channel);
       }
-    });
+    };
+    this.subscriber.on('message', (channel, messageStr) => messageRecieved(channel, messageStr));
+    for (const field of ['afterSave', 'afterDelete', 'clearCache']) {
+      const channel = `${Parse.applicationId}${field}`;
+      this.subscriber.subscribe(channel, messageStr => messageRecieved(channel, messageStr));
+    }
   }
 
   // Message is the JSON object from publisher. Message.currentParseObject is the ParseObject JSON after changes.
@@ -170,8 +197,10 @@ class ParseLiveQueryServer {
             };
             const trigger = getTrigger(className, 'afterEvent', Parse.applicationId);
             if (trigger) {
-              const auth = await this.getAuthForSessionToken(res.sessionToken);
-              res.user = auth.user;
+              const auth = await this.getAuthFromClient(client, requestId);
+              if (auth && auth.user) {
+                res.user = auth.user;
+              }
               if (res.object) {
                 res.object = Parse.Object.fromJSON(res.object);
               }
@@ -181,18 +210,20 @@ class ParseLiveQueryServer {
               return;
             }
             if (res.object && typeof res.object.toJSON === 'function') {
-              deletedParseObject = res.object.toJSON();
-              deletedParseObject.className = className;
+              deletedParseObject = toJSONwithObjects(res.object, res.object.className || className);
             }
-            client.pushDelete(requestId, deletedParseObject);
-          } catch (error) {
-            Client.pushError(
-              client.parseWebSocket,
-              error.code || 141,
-              error.message || error,
-              false,
-              requestId
+            await this._filterSensitiveData(
+              classLevelPermissions,
+              res,
+              client,
+              requestId,
+              op,
+              subscription.query
             );
+            client.pushDelete(requestId, deletedParseObject);
+          } catch (e) {
+            const error = resolveError(e);
+            Client.pushError(client.parseWebSocket, error.code, error.message, false, requestId);
             logger.error(
               `Failed running afterLiveQueryEvent on class ${className} for event ${res.event} with session ${res.sessionToken} with:\n Error: ` +
                 JSON.stringify(error)
@@ -298,7 +329,6 @@ class ParseLiveQueryServer {
             } else {
               return null;
             }
-            message.event = type;
             res = {
               event: type,
               sessionToken: client.sessionToken,
@@ -318,35 +348,39 @@ class ParseLiveQueryServer {
               if (res.original) {
                 res.original = Parse.Object.fromJSON(res.original);
               }
-              const auth = await this.getAuthForSessionToken(res.sessionToken);
-              res.user = auth.user;
+              const auth = await this.getAuthFromClient(client, requestId);
+              if (auth && auth.user) {
+                res.user = auth.user;
+              }
               await runTrigger(trigger, `afterEvent.${className}`, res, auth);
             }
             if (!res.sendEvent) {
               return;
             }
             if (res.object && typeof res.object.toJSON === 'function') {
-              currentParseObject = res.object.toJSON();
-              currentParseObject.className = res.object.className || className;
+              currentParseObject = toJSONwithObjects(res.object, res.object.className || className);
             }
-
             if (res.original && typeof res.original.toJSON === 'function') {
-              originalParseObject = res.original.toJSON();
-              originalParseObject.className = res.original.className || className;
+              originalParseObject = toJSONwithObjects(
+                res.original,
+                res.original.className || className
+              );
             }
-            const functionName =
-              'push' + message.event.charAt(0).toUpperCase() + message.event.slice(1);
+            await this._filterSensitiveData(
+              classLevelPermissions,
+              res,
+              client,
+              requestId,
+              op,
+              subscription.query
+            );
+            const functionName = 'push' + res.event.charAt(0).toUpperCase() + res.event.slice(1);
             if (client[functionName]) {
               client[functionName](requestId, currentParseObject, originalParseObject);
             }
-          } catch (error) {
-            Client.pushError(
-              client.parseWebSocket,
-              error.code || 141,
-              error.message || error,
-              false,
-              requestId
-            );
+          } catch (e) {
+            const error = resolveError(e);
+            Client.pushError(client.parseWebSocket, error.code, error.message, false, requestId);
             logger.error(
               `Failed running afterLiveQueryEvent on class ${className} for event ${res.event} with session ${res.sessionToken} with:\n Error: ` +
                 JSON.stringify(error)
@@ -459,6 +493,32 @@ class ParseLiveQueryServer {
     return matchesQuery(parseObject, subscription.query);
   }
 
+  async _clearCachedRoles(userId: string) {
+    try {
+      const validTokens = await new Parse.Query(Parse.Session)
+        .equalTo('user', Parse.User.createWithoutData(userId))
+        .find({ useMasterKey: true });
+      await Promise.all(
+        validTokens.map(async token => {
+          const sessionToken = token.get('sessionToken');
+          const authPromise = this.authCache.get(sessionToken);
+          if (!authPromise) {
+            return;
+          }
+          const [auth1, auth2] = await Promise.all([
+            authPromise,
+            getAuthForSessionToken({ cacheController: this.cacheController, sessionToken }),
+          ]);
+          auth1.auth?.clearRoleCache(sessionToken);
+          auth2.auth?.clearRoleCache(sessionToken);
+          this.authCache.del(sessionToken);
+        })
+      );
+    } catch (e) {
+      logger.verbose(`Could not clear role cache. ${e}`);
+    }
+  }
+
   getAuthForSessionToken(sessionToken: ?string): Promise<{ auth: ?Auth, userId: ?string }> {
     if (!sessionToken) {
       return Promise.resolve({});
@@ -531,6 +591,54 @@ class ParseLiveQueryServer {
     // return rolesQuery.find({useMasterKey:true});
   }
 
+  async _filterSensitiveData(
+    classLevelPermissions: ?any,
+    res: any,
+    client: any,
+    requestId: number,
+    op: string,
+    query: any
+  ) {
+    const subscriptionInfo = client.getSubscriptionInfo(requestId);
+    const aclGroup = ['*'];
+    let clientAuth;
+    if (typeof subscriptionInfo !== 'undefined') {
+      const { userId, auth } = await this.getAuthForSessionToken(subscriptionInfo.sessionToken);
+      if (userId) {
+        aclGroup.push(userId);
+      }
+      clientAuth = auth;
+    }
+    const filter = obj => {
+      if (!obj) {
+        return;
+      }
+      let protectedFields = classLevelPermissions?.protectedFields || [];
+      if (!client.hasMasterKey && !Array.isArray(protectedFields)) {
+        protectedFields = getDatabaseController(this.config).addProtectedFields(
+          classLevelPermissions,
+          res.object.className,
+          query,
+          aclGroup,
+          clientAuth
+        );
+      }
+      return DatabaseController.filterSensitiveData(
+        client.hasMasterKey,
+        aclGroup,
+        clientAuth,
+        op,
+        classLevelPermissions,
+        res.object.className,
+        protectedFields,
+        obj,
+        query
+      );
+    };
+    res.object = filter(res.object);
+    res.original = filter(res.original);
+  }
+
   _getCLPOperation(query: any) {
     return typeof query === 'object' &&
       Object.keys(query).length == 1 &&
@@ -565,7 +673,6 @@ class ParseLiveQueryServer {
         if (!acl_has_roles) {
           return false;
         }
-
         const roleNames = await auth.getUserRoles();
         // Finally, see if any of the user's roles allow them read access
         for (const role of roleNames) {
@@ -579,6 +686,24 @@ class ParseLiveQueryServer {
       .catch(() => {
         return false;
       });
+  }
+
+  async getAuthFromClient(client: any, requestId: number, sessionToken: string) {
+    const getSessionFromClient = () => {
+      const subscriptionInfo = client.getSubscriptionInfo(requestId);
+      if (typeof subscriptionInfo === 'undefined') {
+        return client.sessionToken;
+      }
+      return subscriptionInfo.sessionToken || client.sessionToken;
+    };
+    if (!sessionToken) {
+      sessionToken = getSessionFromClient();
+    }
+    if (!sessionToken) {
+      return;
+    }
+    const { auth } = await this.getAuthForSessionToken(sessionToken);
+    return auth;
   }
 
   async _matchesACL(acl: any, client: any, requestId: number): Promise<boolean> {
@@ -633,8 +758,10 @@ class ParseLiveQueryServer {
       };
       const trigger = getTrigger('@Connect', 'beforeConnect', Parse.applicationId);
       if (trigger) {
-        const auth = await this.getAuthForSessionToken(req.sessionToken);
-        req.user = auth.user;
+        const auth = await this.getAuthFromClient(client, request.requestId, req.sessionToken);
+        if (auth && auth.user) {
+          req.user = auth.user;
+        }
         await runTrigger(trigger, `beforeConnect.@Connect`, req, auth);
       }
       parseWebsocket.clientId = clientId;
@@ -642,8 +769,9 @@ class ParseLiveQueryServer {
       logger.info(`Create new client: ${parseWebsocket.clientId}`);
       client.pushConnect();
       runLiveQueryEventHandlers(req);
-    } catch (error) {
-      Client.pushError(parseWebsocket, error.code || 141, error.message || error, false);
+    } catch (e) {
+      const error = resolveError(e);
+      Client.pushError(parseWebsocket, error.code, error.message, false);
       logger.error(
         `Failed running beforeConnect for session ${request.sessionToken} with:\n Error: ` +
           JSON.stringify(error)
@@ -689,11 +817,15 @@ class ParseLiveQueryServer {
     }
     const client = this.clients.get(parseWebsocket.clientId);
     const className = request.query.className;
+    let authCalled = false;
     try {
       const trigger = getTrigger(className, 'beforeSubscribe', Parse.applicationId);
       if (trigger) {
-        const auth = await this.getAuthForSessionToken(request.sessionToken);
-        request.user = auth.user;
+        const auth = await this.getAuthFromClient(client, request.requestId, request.sessionToken);
+        authCalled = true;
+        if (auth && auth.user) {
+          request.user = auth.user;
+        }
 
         const parseQuery = new Parse.Query(className);
         parseQuery.withJSON(request.query);
@@ -707,6 +839,30 @@ class ParseLiveQueryServer {
         request.query = query;
       }
 
+      if (className === '_Session') {
+        if (!authCalled) {
+          const auth = await this.getAuthFromClient(
+            client,
+            request.requestId,
+            request.sessionToken
+          );
+          if (auth && auth.user) {
+            request.user = auth.user;
+          }
+        }
+        if (request.user) {
+          request.query.where.user = request.user.toPointer();
+        } else if (!request.master) {
+          Client.pushError(
+            parseWebsocket,
+            Parse.Error.INVALID_SESSION_TOKEN,
+            'Invalid session token',
+            false,
+            request.requestId
+          );
+          return;
+        }
+      }
       // Get subscription from subscriptions, create one if necessary
       const subscriptionHash = queryHash(request.query);
       // Add className to subscriptions if necessary
@@ -755,10 +911,11 @@ class ParseLiveQueryServer {
         installationId: client.installationId,
       });
     } catch (e) {
-      Client.pushError(parseWebsocket, e.code || 141, e.message || e, false, request.requestId);
+      const error = resolveError(e);
+      Client.pushError(parseWebsocket, error.code, error.message, false, request.requestId);
       logger.error(
         `Failed running beforeSubscribe on ${className} for session ${request.sessionToken} with:\n Error: ` +
-          JSON.stringify(e)
+          JSON.stringify(error)
       );
     }
   }

@@ -355,6 +355,117 @@ describe('cloud validator', () => {
       });
   });
 
+  it('set params not-required options data', done => {
+    Parse.Cloud.define(
+      'hello',
+      req => {
+        expect(req.params.data).toBe('abc');
+        return 'Hello world!';
+      },
+      {
+        fields: {
+          data: {
+            type: String,
+            required: false,
+            options: s => {
+              return s.length >= 4 && s.length <= 50;
+            },
+            error: 'Validation failed. Expected length of data to be between 4 and 50.',
+          },
+        },
+      }
+    );
+    Parse.Cloud.run('hello', { data: 'abc' })
+      .then(() => {
+        fail('function should have failed.');
+      })
+      .catch(error => {
+        expect(error.code).toEqual(Parse.Error.VALIDATION_ERROR);
+        expect(error.message).toEqual(
+          'Validation failed. Expected length of data to be between 4 and 50.'
+        );
+        done();
+      });
+  });
+
+  it('set params not-required type', done => {
+    Parse.Cloud.define(
+      'hello',
+      req => {
+        expect(req.params.data).toBe(null);
+        return 'Hello world!';
+      },
+      {
+        fields: {
+          data: {
+            type: String,
+            required: false,
+          },
+        },
+      }
+    );
+    Parse.Cloud.run('hello', { data: null })
+      .then(() => {
+        fail('function should have failed.');
+      })
+      .catch(error => {
+        expect(error.code).toEqual(Parse.Error.VALIDATION_ERROR);
+        expect(error.message).toEqual('Validation failed. Invalid type for data. Expected: string');
+        done();
+      });
+  });
+
+  it('set params not-required options', done => {
+    Parse.Cloud.define(
+      'hello',
+      () => {
+        return 'Hello world!';
+      },
+      {
+        fields: {
+          data: {
+            type: String,
+            required: false,
+            options: s => {
+              return s.length >= 4 && s.length <= 50;
+            },
+          },
+        },
+      }
+    );
+    Parse.Cloud.run('hello', {})
+      .then(() => {
+        done();
+      })
+      .catch(() => {
+        fail('function should not have failed.');
+      });
+  });
+
+  it('set params not-required no-options', done => {
+    Parse.Cloud.define(
+      'hello',
+      () => {
+        return 'Hello world!';
+      },
+      {
+        fields: {
+          data: {
+            type: String,
+            required: false,
+          },
+        },
+      }
+    );
+    Parse.Cloud.run('hello', {})
+      .then(() => {
+        done();
+      })
+      .catch(() => {
+        fail('function should not have failed.');
+      });
+  });
+
   it('set params option', done => {
     Parse.Cloud.define(
       'hello',
@@ -626,7 +737,8 @@ describe('cloud validator', () => {
   });
 
   it('basic beforeSaveFile skipWithMasterKey', async done => {
-    Parse.Cloud.beforeSaveFile(
+    Parse.Cloud.beforeSave(
+      Parse.File,
       () => {
         throw 'beforeSaveFile should have resolved using master key.';
       },
@@ -920,7 +1032,8 @@ describe('cloud validator', () => {
 
     const role2 = new Parse.Role('Admin2', roleACL);
     role2.getUsers().add(user);
-    await Promise.all([role.save({ useMasterKey: true }), role2.save({ useMasterKey: true })]);
+    await role.save({ useMasterKey: true });
+    await role2.save({ useMasterKey: true });
     await Parse.Cloud.run('cloudFunction');
     done();
   });
@@ -981,7 +1094,8 @@ describe('cloud validator', () => {
 
     const role2 = new Parse.Role('AdminB', roleACL);
     role2.getUsers().add(user);
-    await Promise.all([role.save({ useMasterKey: true }), role2.save({ useMasterKey: true })]);
+    await role.save({ useMasterKey: true });
+    await role2.save({ useMasterKey: true });
     await Parse.Cloud.run('cloudFunction');
     done();
   });
@@ -1318,7 +1432,7 @@ describe('cloud validator', () => {
   });
 
   it('validate beforeSaveFile', async done => {
-    Parse.Cloud.beforeSaveFile(() => {}, validatorSuccess);
+    Parse.Cloud.beforeSave(Parse.File, () => {}, validatorSuccess);
 
     const file = new Parse.File('popeye.txt', [1, 2, 3], 'text/plain');
     const result = await file.save({ useMasterKey: true });
@@ -1327,7 +1441,7 @@ describe('cloud validator', () => {
   });
 
   it('validate beforeSaveFile fail', async done => {
-    Parse.Cloud.beforeSaveFile(() => {}, validatorFail);
+    Parse.Cloud.beforeSave(Parse.File, () => {}, validatorFail);
     try {
       const file = new Parse.File('popeye.txt', [1, 2, 3], 'text/plain');
       await file.save({ useMasterKey: true });
@@ -1339,7 +1453,7 @@ describe('cloud validator', () => {
   });
 
   it('validate afterSaveFile', async done => {
-    Parse.Cloud.afterSaveFile(() => {}, validatorSuccess);
+    Parse.Cloud.afterSave(Parse.File, () => {}, validatorSuccess);
 
     const file = new Parse.File('popeye.txt', [1, 2, 3], 'text/plain');
     const result = await file.save({ useMasterKey: true });
@@ -1348,7 +1462,7 @@ describe('cloud validator', () => {
   });
 
   it('validate afterSaveFile fail', async done => {
-    Parse.Cloud.beforeSaveFile(() => {}, validatorFail);
+    Parse.Cloud.beforeSave(Parse.File, () => {}, validatorFail);
     try {
       const file = new Parse.File('popeye.txt', [1, 2, 3], 'text/plain');
       await file.save({ useMasterKey: true });
@@ -1360,7 +1474,7 @@ describe('cloud validator', () => {
   });
 
   it('validate beforeDeleteFile', async done => {
-    Parse.Cloud.beforeDeleteFile(() => {}, validatorSuccess);
+    Parse.Cloud.beforeDelete(Parse.File, () => {}, validatorSuccess);
 
     const file = new Parse.File('popeye.txt', [1, 2, 3], 'text/plain');
     await file.save();
@@ -1369,7 +1483,7 @@ describe('cloud validator', () => {
   });
 
   it('validate beforeDeleteFile fail', async done => {
-    Parse.Cloud.beforeDeleteFile(() => {}, validatorFail);
+    Parse.Cloud.beforeDelete(Parse.File, () => {}, validatorFail);
     try {
       const file = new Parse.File('popeye.txt', [1, 2, 3], 'text/plain');
       await file.save();
@@ -1382,7 +1496,7 @@ describe('cloud validator', () => {
   });
 
   it('validate afterDeleteFile', async done => {
-    Parse.Cloud.afterDeleteFile(() => {}, validatorSuccess);
+    Parse.Cloud.afterDelete(Parse.File, () => {}, validatorSuccess);
 
     const file = new Parse.File('popeye.txt', [1, 2, 3], 'text/plain');
     await file.save();
@@ -1391,7 +1505,7 @@ describe('cloud validator', () => {
   });
 
   it('validate afterDeleteFile fail', async done => {
-    Parse.Cloud.afterDeleteFile(() => {}, validatorFail);
+    Parse.Cloud.afterDelete(Parse.File, () => {}, validatorFail);
     try {
       const file = new Parse.File('popeye.txt', [1, 2, 3], 'text/plain');
       await file.save();

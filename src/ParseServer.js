@@ -41,6 +41,10 @@ import { AggregateRouter } from './Routers/AggregateRouter';
 import { ParseServerRESTController } from './ParseServerRESTController';
 import * as controllers from './Controllers';
 import { ParseGraphQLServer } from './GraphQL/ParseGraphQLServer';
+import { SecurityRouter } from './Routers/SecurityRouter';
+import CheckRunner from './Security/CheckRunner';
+import Deprecator from './Deprecator/Deprecator';
+import { DefinedSchemas } from './SchemaMigrations/DefinedSchemas';
 
 // Mutate the Parse object to add the Cloud Code handlers
 addParseCloud();
@@ -53,14 +57,19 @@ class ParseServer {
    * @param {ParseServerOptions} options the parse server initialization options
    */
   constructor(options: ParseServerOptions) {
+    // Scan for deprecated Parse Server options
+    Deprecator.scanParseServerOptions(options);
+    // Set option defaults
     injectDefaults(options);
     const {
       appId = requiredParameter('You must provide an appId!'),
       masterKey = requiredParameter('You must provide a masterKey!'),
       cloud,
+      security,
       javascriptKey,
       serverURL = requiredParameter('You must provide a serverURL!'),
       serverStartComplete,
+      schema,
     } = options;
     // Initialize the node client SDK automatically
     Parse.initialize(appId, javascriptKey || 'unused', masterKey);
@@ -68,16 +77,34 @@ class ParseServer {
 
     const allControllers = controllers.getControllers(options);
 
-    const { loggerController, databaseController, hooksController } = allControllers;
+    const {
+      loggerController,
+      databaseController,
+      hooksController,
+      liveQueryController,
+    } = allControllers;
     this.config = Config.put(Object.assign({}, options, allControllers));
 
     logging.setLogger(loggerController);
-    const dbInitPromise = databaseController.performInitialization();
-    const hooksLoadPromise = hooksController.load();
 
     // Note: Tests will start to fail if any validation happens after this is called.
-    Promise.all([dbInitPromise, hooksLoadPromise])
-      .then(() => {
+    databaseController
+      .performInitialization()
+      .then(() => hooksController.load())
+      .then(async () => {
+        const startupPromises = [];
+        if (schema) {
+          startupPromises.push(new DefinedSchemas(schema, this.config).execute());
+        }
+        if (
+          options.cacheAdapter &&
+          options.cacheAdapter.connect &&
+          typeof options.cacheAdapter.connect === 'function'
+        ) {
+          startupPromises.push(options.cacheAdapter.connect());
+        }
+        startupPromises.push(liveQueryController.connect());
+        await Promise.all(startupPromises);
         if (serverStartComplete) {
           serverStartComplete();
         }
@@ -100,6 +127,9 @@ class ParseServer {
           } else {
             throw "argument 'cloud' must either be a string or a function";
           }
+        }
+        if (security && security.enableCheck && security.enableCheckLog) {
+          new CheckRunner(options.security).run();
         }
       });
   }
@@ -220,6 +250,7 @@ class ParseServer {
       new CloudCodeRouter(),
       new AudiencesRouter(),
       new AggregateRouter(),
+      new SecurityRouter(),
     ];
 
     const routes = routers.reduce((memo, router) => {
@@ -238,7 +269,7 @@ class ParseServer {
    * @param {Function} callback called when the server has started
    * @returns {ParseServer} the parse server instance
    */
-  start(options: ParseServerOptions, callback: ?() => void) {
+  async start(options: ParseServerOptions, callback: ?() => void) {
     const app = express();
     if (options.middleware) {
       let middleware;
@@ -282,7 +313,7 @@ class ParseServer {
     this.server = server;
 
     if (options.startLiveQueryServer || options.liveQueryServerOptions) {
-      this.liveQueryServer = ParseServer.createLiveQueryServer(
+      this.liveQueryServer = await ParseServer.createLiveQueryServer(
         server,
         options.liveQueryServerOptions,
         options
@@ -313,9 +344,9 @@ class ParseServer {
    * @param {Server} httpServer an optional http server to pass
    * @param {LiveQueryServerOptions} config options for the liveQueryServer
    * @param {ParseServerOptions} options options for the ParseServer
-   * @returns {ParseLiveQueryServer} the live query server instance
+   * @returns {Promise<ParseLiveQueryServer>} the live query server instance
    */
-  static createLiveQueryServer(
+  static async createLiveQueryServer(
     httpServer,
     config: LiveQueryServerOptions,
     options: ParseServerOptions
@@ -325,7 +356,9 @@ class ParseServer {
       httpServer = require('http').createServer(app);
       httpServer.listen(config.port);
     }
-    return new ParseLiveQueryServer(httpServer, config, options);
+    const server = new ParseLiveQueryServer(httpServer, config, options);
+    await server.connect();
+    return server;
   }
 
   static verifyServerUrl(callback) {
@@ -358,6 +391,16 @@ class ParseServer {
 
 function addParseCloud() {
   const ParseCloud = require('./cloud-code/Parse.Cloud');
+  Object.defineProperty(Parse, 'Server', {
+    get() {
+      return Config.get(Parse.applicationId);
+    },
+    set(newVal) {
+      newVal.appId = Parse.applicationId;
+      Config.put(newVal);
+    },
+    configurable: true,
+  });
   Object.assign(Parse.Cloud, ParseCloud);
   global.Parse = Parse;
 }
@@ -436,7 +479,7 @@ function configureListeners(parseServer) {
   const server = parseServer.server;
   const sockets = {};
   /* Currently, express doesn't shut down immediately after receiving SIGINT/SIGTERM if it has client connections that haven't timed out. (This is a known issue with node - https://github.com/nodejs/node/issues/2642)
-   This function, along with `destroyAliveConnections()`, intend to fix this behavior such that parse server will close all open connections and initiate the shutdown process as soon as it receives a SIGINT/SIGTERM signal. */
+    This function, along with `destroyAliveConnections()`, intend to fix this behavior such that parse server will close all open connections and initiate the shutdown process as soon as it receives a SIGINT/SIGTERM signal. */
   server.on('connection', socket => {
     const socketId = socket.remoteAddress + ':' + socket.remotePort;
     sockets[socketId] = socket;

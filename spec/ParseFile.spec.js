@@ -3,6 +3,7 @@
 
 'use strict';
 
+const { FilesController } = require('../lib/Controllers/FilesController');
 const request = require('../lib/request');
 
 const str = 'Hello World!';
@@ -203,6 +204,34 @@ describe('Parse.File testing', () => {
       ok(file.name());
       ok(file.url());
       notEqual(file.name(), 'hello.txt');
+    });
+
+    it('saves the file with tags', async () => {
+      spyOn(FilesController.prototype, 'createFile').and.callThrough();
+      const file = new Parse.File('hello.txt', data, 'text/plain');
+      const tags = { hello: 'world' };
+      file.setTags(tags);
+      expect(file.url()).toBeUndefined();
+      const result = await file.save();
+      expect(file.name()).toBeDefined();
+      expect(file.url()).toBeDefined();
+      expect(result.tags()).toEqual(tags);
+      expect(FilesController.prototype.createFile.calls.argsFor(0)[4]).toEqual({
+        tags: tags,
+        metadata: {},
+      });
+    });
+
+    it('does not pass empty file tags while saving', async () => {
+      spyOn(FilesController.prototype, 'createFile').and.callThrough();
+      const file = new Parse.File('hello.txt', data, 'text/plain');
+      expect(file.url()).toBeUndefined();
+      expect(file.name()).toBeDefined();
+      await file.save();
+      expect(file.url()).toBeDefined();
+      expect(FilesController.prototype.createFile.calls.argsFor(0)[4]).toEqual({
+        metadata: {},
+      });
     });
 
     it('save file in object', async done => {
@@ -625,7 +654,236 @@ describe('Parse.File testing', () => {
     });
   });
 
-  xdescribe('Gridstore Range tests', () => {
+  describe('getting files', () => {
+    it('does not crash on file request with invalid app ID', async () => {
+      const res1 = await request({
+        url: 'http://localhost:8378/1/files/invalid-id/invalid-file.txt',
+      }).catch(e => e);
+      expect(res1.status).toBe(403);
+      expect(res1.data).toEqual({ code: 119, error: 'Invalid application ID.' });
+      // Ensure server did not crash
+      const res2 = await request({ url: 'http://localhost:8378/1/health' });
+      expect(res2.status).toEqual(200);
+      expect(res2.data).toEqual({ status: 'ok' });
+    });
+
+    it('does not crash on file request with invalid path', async () => {
+      const res1 = await request({
+        url: 'http://localhost:8378/1/files/invalid-id//invalid-path/%20/invalid-file.txt',
+      }).catch(e => e);
+      expect(res1.status).toBe(403);
+      expect(res1.data).toEqual({ error: 'unauthorized' });
+      // Ensure server did not crash
+      const res2 = await request({ url: 'http://localhost:8378/1/health' });
+      expect(res2.status).toEqual(200);
+      expect(res2.data).toEqual({ status: 'ok' });
+    });
+
+    it('does not crash on file metadata request with invalid app ID', async () => {
+      const res1 = await request({
+        url: `http://localhost:8378/1/files/invalid-id/metadata/invalid-file.txt`,
+      });
+      expect(res1.status).toBe(200);
+      expect(res1.data).toEqual({});
+      // Ensure server did not crash
+      const res2 = await request({ url: 'http://localhost:8378/1/health' });
+      expect(res2.status).toEqual(200);
+      expect(res2.data).toEqual({ status: 'ok' });
+    });
+  });
+
+  describe_only_db('mongo')('Gridstore Range', () => {
+    it('supports bytes range out of range', async () => {
+      const headers = {
+        'Content-Type': 'application/octet-stream',
+        'X-Parse-Application-Id': 'test',
+        'X-Parse-REST-API-Key': 'rest',
+      };
+      const response = await request({
+        method: 'POST',
+        headers: headers,
+        url: 'http://localhost:8378/1//files/file.txt ',
+        body: repeat('argle bargle', 100),
+      });
+      const b = response.data;
+      const file = await request({
+        url: b.url,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Parse-Application-Id': 'test',
+          Range: 'bytes=15000-18000',
+        },
+      });
+      expect(file.headers['content-range']).toBe('bytes 1212-1212/1212');
+    });
+
+    it('supports bytes range if end greater than start', async () => {
+      const headers = {
+        'Content-Type': 'application/octet-stream',
+        'X-Parse-Application-Id': 'test',
+        'X-Parse-REST-API-Key': 'rest',
+      };
+      const response = await request({
+        method: 'POST',
+        headers: headers,
+        url: 'http://localhost:8378/1//files/file.txt ',
+        body: repeat('argle bargle', 100),
+      });
+      const b = response.data;
+      const file = await request({
+        url: b.url,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Parse-Application-Id': 'test',
+          Range: 'bytes=15000-100',
+        },
+      });
+      expect(file.headers['content-range']).toBe('bytes 100-1212/1212');
+    });
+
+    it('supports bytes range if end is undefined', async () => {
+      const headers = {
+        'Content-Type': 'application/octet-stream',
+        'X-Parse-Application-Id': 'test',
+        'X-Parse-REST-API-Key': 'rest',
+      };
+      const response = await request({
+        method: 'POST',
+        headers: headers,
+        url: 'http://localhost:8378/1//files/file.txt ',
+        body: repeat('argle bargle', 100),
+      });
+      const b = response.data;
+      const file = await request({
+        url: b.url,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Parse-Application-Id': 'test',
+          Range: 'bytes=100-',
+        },
+      });
+      expect(file.headers['content-range']).toBe('bytes 100-1212/1212');
+    });
+
+    it('supports bytes range if start and end undefined', async () => {
+      const headers = {
+        'Content-Type': 'application/octet-stream',
+        'X-Parse-Application-Id': 'test',
+        'X-Parse-REST-API-Key': 'rest',
+      };
+      const response = await request({
+        method: 'POST',
+        headers: headers,
+        url: 'http://localhost:8378/1//files/file.txt ',
+        body: repeat('argle bargle', 100),
+      });
+      const b = response.data;
+      const file = await request({
+        url: b.url,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Parse-Application-Id': 'test',
+          Range: 'bytes=abc-efs',
+        },
+      }).catch(e => e);
+      expect(file.headers['content-range']).toBeUndefined();
+    });
+
+    it('supports bytes range if start and end undefined', async () => {
+      const headers = {
+        'Content-Type': 'application/octet-stream',
+        'X-Parse-Application-Id': 'test',
+        'X-Parse-REST-API-Key': 'rest',
+      };
+      const response = await request({
+        method: 'POST',
+        headers: headers,
+        url: 'http://localhost:8378/1//files/file.txt ',
+        body: repeat('argle bargle', 100),
+      });
+      const b = response.data;
+      const file = await request({
+        url: b.url,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Parse-Application-Id': 'test',
+        },
+      }).catch(e => e);
+      expect(file.headers['content-range']).toBeUndefined();
+    });
+
+    it('supports bytes range if end is greater than size', async () => {
+      const headers = {
+        'Content-Type': 'application/octet-stream',
+        'X-Parse-Application-Id': 'test',
+        'X-Parse-REST-API-Key': 'rest',
+      };
+      const response = await request({
+        method: 'POST',
+        headers: headers,
+        url: 'http://localhost:8378/1//files/file.txt ',
+        body: repeat('argle bargle', 100),
+      });
+      const b = response.data;
+      const file = await request({
+        url: b.url,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Parse-Application-Id': 'test',
+          Range: 'bytes=0-2000',
+        },
+      }).catch(e => e);
+      expect(file.headers['content-range']).toBe('bytes 0-1212/1212');
+    });
+
+    it('supports bytes range if end is greater than size', async () => {
+      const headers = {
+        'Content-Type': 'application/octet-stream',
+        'X-Parse-Application-Id': 'test',
+        'X-Parse-REST-API-Key': 'rest',
+      };
+      const response = await request({
+        method: 'POST',
+        headers: headers,
+        url: 'http://localhost:8378/1//files/file.txt ',
+        body: repeat('argle bargle', 100),
+      });
+      const b = response.data;
+      const file = await request({
+        url: b.url,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Parse-Application-Id': 'test',
+          Range: 'bytes=0-2000',
+        },
+      }).catch(e => e);
+      expect(file.headers['content-range']).toBe('bytes 0-1212/1212');
+    });
+
+    it('supports bytes range with 0 length', async () => {
+      const headers = {
+        'Content-Type': 'application/octet-stream',
+        'X-Parse-Application-Id': 'test',
+        'X-Parse-REST-API-Key': 'rest',
+      };
+      const response = await request({
+        method: 'POST',
+        headers: headers,
+        url: 'http://localhost:8378/1//files/file.txt ',
+        body: 'a',
+      }).catch(e => e);
+      const b = response.data;
+      const file = await request({
+        url: b.url,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Parse-Application-Id': 'test',
+          Range: 'bytes=-2000',
+        },
+      }).catch(e => e);
+      expect(file.headers['content-range']).toBe('bytes 0-1/1');
+    });
+
     it('supports range requests', done => {
       const headers = {
         'Content-Type': 'application/octet-stream',
@@ -714,7 +972,7 @@ describe('Parse.File testing', () => {
       });
     });
 
-    xit('supports getting last n bytes', done => {
+    it('supports getting last n bytes', done => {
       const headers = {
         'Content-Type': 'application/octet-stream',
         'X-Parse-Application-Id': 'test',
@@ -812,8 +1070,8 @@ describe('Parse.File testing', () => {
       });
     });
 
-    it('fails to stream unknown file', done => {
-      request({
+    it('fails to stream unknown file', async () => {
+      const response = await request({
         url: 'http://localhost:8378/1/files/test/file.txt',
         headers: {
           'Content-Type': 'application/octet-stream',
@@ -821,19 +1079,18 @@ describe('Parse.File testing', () => {
           'X-Parse-REST-API-Key': 'rest',
           Range: 'bytes=13-240',
         },
-      }).then(response => {
-        expect(response.status).toBe(404);
-        const body = response.text;
-        expect(body).toEqual('File not found.');
-        done();
-      });
+      }).catch(e => e);
+      expect(response.status).toBe(404);
+      const body = response.text;
+      expect(body).toEqual('File not found.');
     });
   });
 
   // Because GridStore is not loaded on PG, those are perfect
   // for fallback tests
   describe_only_db('postgres')('Default Range tests', () => {
-    it('fallback to regular request', done => {
+    it('fallback to regular request', async done => {
+      await reconfigureServer();
       const headers = {
         'Content-Type': 'application/octet-stream',
         'X-Parse-Application-Id': 'test',

@@ -23,7 +23,7 @@ const headers = {
   'X-Parse-Installation-Id': 'yolo',
 };
 
-describe_only_db('mongo')('miscellaneous', () => {
+describe('miscellaneous', () => {
   it('db contains document after successful save', async () => {
     const obj = new Parse.Object('TestObject');
     obj.set('foo', 'bar');
@@ -67,6 +67,7 @@ describe('miscellaneous', function () {
   });
 
   it('fail to create a duplicate username', async () => {
+    await reconfigureServer();
     let numFailed = 0;
     let numCreated = 0;
     const p1 = request({
@@ -114,6 +115,7 @@ describe('miscellaneous', function () {
   });
 
   it('ensure that email is uniquely indexed', async () => {
+    await reconfigureServer();
     let numFailed = 0;
     let numCreated = 0;
     const p1 = request({
@@ -170,6 +172,7 @@ describe('miscellaneous', function () {
     const config = Config.get('test');
     // Remove existing data to clear out unique index
     TestUtils.destroyAllDataPermanently()
+      .then(() => config.database.adapter.performInitialization({ VolatileClassesSchemas: [] }))
       .then(() => config.database.adapter.createClass('_User', userSchema))
       .then(() =>
         config.database.adapter
@@ -210,6 +213,7 @@ describe('miscellaneous', function () {
     const config = Config.get('test');
     // Remove existing data to clear out unique index
     TestUtils.destroyAllDataPermanently()
+      .then(() => config.database.adapter.performInitialization({ VolatileClassesSchemas: [] }))
       .then(() => config.database.adapter.createClass('_User', userSchema))
       .then(() =>
         config.database.adapter.createObject('_User', userSchema, {
@@ -244,7 +248,8 @@ describe('miscellaneous', function () {
       });
   });
 
-  it('ensure that if you try to sign up a user with a unique username and email, but duplicates in some other field that has a uniqueness constraint, you get a regular duplicate value error', done => {
+  it('ensure that if you try to sign up a user with a unique username and email, but duplicates in some other field that has a uniqueness constraint, you get a regular duplicate value error', async done => {
+    await reconfigureServer();
     const config = Config.get('test');
     config.database.adapter
       .addFieldIfNotExists('_User', 'randomField', { type: 'String' })
@@ -641,6 +646,28 @@ describe('miscellaneous', function () {
       });
   });
 
+  it_only_db('mongo')('pointer reassign on nested fields is working properly (#7391)', async () => {
+    const obj = new Parse.Object('GameScore'); // This object will include nested pointers
+    const ptr1 = new Parse.Object('GameScore');
+    await ptr1.save(); // Obtain a unique id
+    const ptr2 = new Parse.Object('GameScore');
+    await ptr2.save(); // Obtain a unique id
+    obj.set('data', { ptr: ptr1 });
+    await obj.save();
+
+    obj.set('data.ptr', ptr2);
+    await obj.save();
+
+    const obj2 = await new Parse.Query('GameScore').get(obj.id);
+    expect(obj2.get('data').ptr.id).toBe(ptr2.id);
+
+    const query = new Parse.Query('GameScore');
+    query.equalTo('data.ptr', ptr2);
+    const res = await query.find();
+    expect(res.length).toBe(1);
+    expect(res[0].get('data').ptr.id).toBe(ptr2.id);
+  });
+
   it('test afterSave get full object on create and update', function (done) {
     let triggerTime = 0;
     // Register a mock beforeSave hook
@@ -924,57 +951,154 @@ describe('miscellaneous', function () {
       );
   });
 
-  it('should return the updated fields on PUT', done => {
+  it('return the updated fields on PUT', async () => {
     const obj = new Parse.Object('GameScore');
-    obj
-      .save({ a: 'hello', c: 1, d: ['1'], e: ['1'], f: ['1', '2'] })
-      .then(() => {
-        const headers = {
-          'Content-Type': 'application/json',
-          'X-Parse-Application-Id': 'test',
-          'X-Parse-REST-API-Key': 'rest',
-          'X-Parse-Installation-Id': 'yolo',
-        };
-        request({
-          method: 'PUT',
-          headers: headers,
-          url: 'http://localhost:8378/1/classes/GameScore/' + obj.id,
-          body: JSON.stringify({
-            a: 'b',
-            c: { __op: 'Increment', amount: 2 },
-            d: { __op: 'Add', objects: ['2'] },
-            e: { __op: 'AddUnique', objects: ['1', '2'] },
-            f: { __op: 'Remove', objects: ['2'] },
-            selfThing: {
-              __type: 'Pointer',
-              className: 'GameScore',
-              objectId: obj.id,
-            },
-          }),
-        }).then(response => {
-          try {
-            const body = response.data;
-            expect(body.a).toBeUndefined();
-            expect(body.c).toEqual(3); // 2+1
-            expect(body.d.length).toBe(2);
-            expect(body.d.indexOf('1') > -1).toBe(true);
-            expect(body.d.indexOf('2') > -1).toBe(true);
-            expect(body.e.length).toBe(2);
-            expect(body.e.indexOf('1') > -1).toBe(true);
-            expect(body.e.indexOf('2') > -1).toBe(true);
-            expect(body.f.length).toBe(1);
-            expect(body.f.indexOf('1') > -1).toBe(true);
-            // return nothing on other self
-            expect(body.selfThing).toBeUndefined();
-            // updatedAt is always set
-            expect(body.updatedAt).not.toBeUndefined();
-          } catch (e) {
-            fail(e);
-          }
-          done();
-        });
+    const pointer = new Parse.Object('Child');
+    await pointer.save();
+    obj.set(
+      'point',
+      new Parse.GeoPoint({
+        latitude: 37.4848,
+        longitude: -122.1483,
       })
-      .catch(done.fail);
+    );
+    obj.set('array', ['obj1', 'obj2']);
+    obj.set('objects', { a: 'b' });
+    obj.set('string', 'abc');
+    obj.set('bool', true);
+    obj.set('number', 1);
+    obj.set('date', new Date());
+    obj.set('pointer', pointer);
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Parse-Application-Id': 'test',
+      'X-Parse-REST-API-Key': 'rest',
+      'X-Parse-Installation-Id': 'yolo',
+    };
+    const saveResponse = await request({
+      method: 'POST',
+      headers: headers,
+      url: 'http://localhost:8378/1/classes/GameScore',
+      body: JSON.stringify({
+        a: 'hello',
+        c: 1,
+        d: ['1'],
+        e: ['1'],
+        f: ['1', '2'],
+        ...obj.toJSON(),
+      }),
+    });
+    expect(Object.keys(saveResponse.data).sort()).toEqual(['createdAt', 'objectId']);
+    obj.id = saveResponse.data.objectId;
+    const response = await request({
+      method: 'PUT',
+      headers: headers,
+      url: 'http://localhost:8378/1/classes/GameScore/' + obj.id,
+      body: JSON.stringify({
+        a: 'b',
+        c: { __op: 'Increment', amount: 2 },
+        d: { __op: 'Add', objects: ['2'] },
+        e: { __op: 'AddUnique', objects: ['1', '2'] },
+        f: { __op: 'Remove', objects: ['2'] },
+        selfThing: {
+          __type: 'Pointer',
+          className: 'GameScore',
+          objectId: obj.id,
+        },
+      }),
+    });
+    const body = response.data;
+    expect(Object.keys(body).sort()).toEqual(['c', 'd', 'e', 'f', 'updatedAt']);
+    expect(body.a).toBeUndefined();
+    expect(body.c).toEqual(3); // 2+1
+    expect(body.d.length).toBe(2);
+    expect(body.d.indexOf('1') > -1).toBe(true);
+    expect(body.d.indexOf('2') > -1).toBe(true);
+    expect(body.e.length).toBe(2);
+    expect(body.e.indexOf('1') > -1).toBe(true);
+    expect(body.e.indexOf('2') > -1).toBe(true);
+    expect(body.f.length).toBe(1);
+    expect(body.f.indexOf('1') > -1).toBe(true);
+    expect(body.selfThing).toBeUndefined();
+    expect(body.updatedAt).not.toBeUndefined();
+  });
+
+  it('should response should not change with triggers', async () => {
+    const obj = new Parse.Object('GameScore');
+    const pointer = new Parse.Object('Child');
+    Parse.Cloud.beforeSave('GameScore', request => {
+      return request.object;
+    });
+    Parse.Cloud.afterSave('GameScore', request => {
+      return request.object;
+    });
+    await pointer.save();
+    obj.set(
+      'point',
+      new Parse.GeoPoint({
+        latitude: 37.4848,
+        longitude: -122.1483,
+      })
+    );
+    obj.set('array', ['obj1', 'obj2']);
+    obj.set('objects', { a: 'b' });
+    obj.set('string', 'abc');
+    obj.set('bool', true);
+    obj.set('number', 1);
+    obj.set('date', new Date());
+    obj.set('pointer', pointer);
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Parse-Application-Id': 'test',
+      'X-Parse-REST-API-Key': 'rest',
+      'X-Parse-Installation-Id': 'yolo',
+    };
+    const saveResponse = await request({
+      method: 'POST',
+      headers: headers,
+      url: 'http://localhost:8378/1/classes/GameScore',
+      body: JSON.stringify({
+        a: 'hello',
+        c: 1,
+        d: ['1'],
+        e: ['1'],
+        f: ['1', '2'],
+        ...obj.toJSON(),
+      }),
+    });
+    expect(Object.keys(saveResponse.data).sort()).toEqual(['createdAt', 'objectId']);
+    obj.id = saveResponse.data.objectId;
+    const response = await request({
+      method: 'PUT',
+      headers: headers,
+      url: 'http://localhost:8378/1/classes/GameScore/' + obj.id,
+      body: JSON.stringify({
+        a: 'b',
+        c: { __op: 'Increment', amount: 2 },
+        d: { __op: 'Add', objects: ['2'] },
+        e: { __op: 'AddUnique', objects: ['1', '2'] },
+        f: { __op: 'Remove', objects: ['2'] },
+        selfThing: {
+          __type: 'Pointer',
+          className: 'GameScore',
+          objectId: obj.id,
+        },
+      }),
+    });
+    const body = response.data;
+    expect(Object.keys(body).sort()).toEqual(['c', 'd', 'e', 'f', 'updatedAt']);
+    expect(body.a).toBeUndefined();
+    expect(body.c).toEqual(3); // 2+1
+    expect(body.d.length).toBe(2);
+    expect(body.d.indexOf('1') > -1).toBe(true);
+    expect(body.d.indexOf('2') > -1).toBe(true);
+    expect(body.e.length).toBe(2);
+    expect(body.e.indexOf('1') > -1).toBe(true);
+    expect(body.e.indexOf('2') > -1).toBe(true);
+    expect(body.f.length).toBe(1);
+    expect(body.f.indexOf('1') > -1).toBe(true);
+    expect(body.selfThing).toBeUndefined();
+    expect(body.updatedAt).not.toBeUndefined();
   });
 
   it('test cloud function error handling', done => {
@@ -988,7 +1112,7 @@ describe('miscellaneous', function () {
         done();
       },
       e => {
-        expect(e.code).toEqual(141);
+        expect(e.code).toEqual(Parse.Error.SCRIPT_FAILED);
         expect(e.message).toEqual('noway');
         done();
       }
