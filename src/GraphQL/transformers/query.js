@@ -52,8 +52,7 @@ const transformQueryConstraintInputToParse = (
   parseClasses,
   schema
 ) => {
-  const fields =
-    parseClasses.find(parseClass => parseClass.className === className)?.fields || schema?.fields;
+  const fields = parseClasses[className]?.fields || schema?.fields;
   if (parentFieldName === 'id' && className) {
     Object.keys(constraints).forEach(constraintName => {
       const constraintValue = constraints[constraintName];

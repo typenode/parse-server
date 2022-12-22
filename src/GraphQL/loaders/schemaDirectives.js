@@ -28,6 +28,8 @@ const load = parseGraphQLSchema => {
                   auth,
                   info,
                   body: args,
+                  _source,
+                  _info: gqlInfo,
                 })
               ).response.result;
             } catch (e) {
