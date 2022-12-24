@@ -85,6 +85,8 @@ function validateValidator(validator) {
  */
 
 var ParseCloud = {};
+
+ParseCloud.httpRequest = require('../request');
 /**
  * Defines a Cloud Function.
  *
