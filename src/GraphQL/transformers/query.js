@@ -136,6 +136,36 @@ const transformQueryConstraintInputToParse = (
       return;
     } else if (
       fields[parentFieldName] &&
+      fields[parentFieldName].type === 'Object' &&
+      fields[parentFieldName].schema
+    ) {
+      const schema = fields[parentFieldName].schema;
+      const targetClass = schema.className;
+      fieldValue = { [fieldName]: fieldValue };
+      transformQueryInputToParse(fieldValue, targetClass, parseClasses, schema);
+      delete parentConstraints[parentFieldName];
+      const combinedKey = `${parentFieldName}.${fieldName}`;
+      if (typeof fieldValue[fieldName] === 'undefined') {
+        //fix multi level nesting query. (need to test)
+        const q = {};
+        Object.keys(fieldValue).map(key => {
+          let k;
+          if (!Object.values(parseQueryMap).includes(key)) {
+            k = `${parentFieldName}.${key}`;
+          } else {
+            k = key;
+          }
+          q[k] = fieldValue[key];
+        });
+        Object.assign(parentConstraints, q);
+      } else {
+        parentConstraints[combinedKey] = fieldValue[fieldName];
+      }
+      // parentConstraints[ parentFieldName ] = fieldValue;
+      delete constraints[fieldName];
+      return;
+    } else if (
+      fields[parentFieldName] &&
       (fields[parentFieldName].type === 'Pointer' || fields[parentFieldName].type === 'Relation')
     ) {
       const { targetClass } = fields[parentFieldName];
