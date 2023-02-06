@@ -1,6 +1,6 @@
 {
   "name": "@typenode/parse-server",
-  "version": "6.0.3",
+  "version": "6.0.4",
   "description": "An express module providing a Parse-compatible API server",
   "main": "lib/index.js",
   "types": "types/index.d.ts",

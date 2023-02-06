@@ -1,23 +1,26 @@
-const SchemaCache = {};
+import { InMemoryCache } from './InMemoryCache';
 
-export default {
+const SCHEMAS = '__SCHEMAS__';
+
+export class SchemaCache {
+  cache: InMemoryCache;
+  constructor() {
+    this.cache = new InMemoryCache({ ttl: 10000 });
+  }
   all() {
-    return [...(SchemaCache.allClasses || [])];
-  },
-
+    const allClasses = this.cache.get(SCHEMAS);
+    return [...(allClasses || [])];
+  }
   get(className) {
     return this.all().find(cached => cached.className === className);
-  },
-
+  }
   put(allSchema) {
-    SchemaCache.allClasses = allSchema;
-  },
-
-  del(className) {
-    this.put(this.all().filter(cached => cached.className !== className));
-  },
-
+    this.cache.put(SCHEMAS, allSchema);
+  }
   clear() {
-    delete SchemaCache.allClasses;
-  },
-};
+    this.cache.del(SCHEMAS);
+    this.cache.clear();
+  }
+}
+
+export default new SchemaCache();
