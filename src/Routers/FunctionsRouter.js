@@ -91,7 +91,7 @@ export class FunctionsRouter extends PromiseRouter {
         headers: {
           'X-Parse-Job-Status-Id': jobStatus.objectId,
         },
-        response: {},
+        response: jobStatus.objectId,
       };
     });
   }
